@@ -197,6 +197,9 @@ h2.sec small{margin-left:auto;font-size:12px;color:var(--blue);font-weight:700}
 .fgroup input,.fgroup select{width:100%;height:50px;border:1.5px solid var(--border);border-radius:13px;background:var(--bg);padding:0 14px;outline:none;font-weight:600}
 .fgroup input:focus,.fgroup select:focus{border-color:var(--blue);background:#fff}
 .frow{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.exmedia{width:100%;display:block;border-radius:16px;border:1.5px solid var(--border);background:#EFF6FF;margin:10px 0 2px}
+.muscles{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.mistake{margin-top:14px;background:#FEF2F2;border:1.5px solid #FECACA;color:#991B1B;border-radius:14px;padding:11px 13px;font-size:13.5px;line-height:1.5}
 .cues{list-style:none;margin:8px 0}
 .cues li{display:flex;gap:10px;font-size:14px;line-height:1.5;padding:7px 0;border-bottom:1px dashed var(--border)}
 .cues li:last-child{border-bottom:none}
@@ -657,6 +660,7 @@ function renderWorkout() {
         + '<button class="check' + (s.done ? " on" : "") + '" onclick="toggleDone(' + ii + "," + si + ')">' + ic("check", 20) + "</button></div>";
     }).join("");
     return '<div class="logex"><header><span><b>' + esc(ex.n) + '</b><br><span class="mus">' + ex.m + " · " + (ex.t === "w" ? "Weight + Reps" : ex.t === "b" ? "Bodyweight + Reps" : "Timed Hold") + (lp ? " · " + lp : "") + '</span></span>'
+      + '<button class="x" title="Form & animation" onclick="openExercise(\'' + ex.id + '\')">👁️</button>'
       + '<button class="x" onclick="removeExercise(' + ii + ')">' + ic("x", 16) + "</button></header>"
       + '<div class="sethead ' + cols + '">' + head + "</div>" + rows
       + '<div style="display:flex;border-top:1px dashed var(--border);margin-top:5px"><button class="addset" style="border:none;margin:0;flex:1" onclick="addSet(' + ii + ')">＋ Add Set</button>'
@@ -828,6 +832,41 @@ function finishWorkout() {
 
 /* ---------------- EXERCISES TAB ---------------- */
 const exFilter = { cat: "all", muscle: "all", q: "" };
+/* Media gerakan: animasi WebP dari hasaneyldrm/exercises-dataset (CC, lihat NOTICE.md);
+   5 gerakan tanpa padanan dataset memakai diagram SVG gambar sendiri. */
+const ANIM = { bench:"webp", incdb:"webp", cablefly:"webp", squat:"webp", legpress:"webp", rdl:"webp", deadlift:"webp", row:"webp", latpd:"webp", ohp:"webp", curl:"webp", pushdown:"webp", pushup:"webp", diamond:"webp", pullup:"webp", chinup:"webp", ausrow:"webp", dips:"webp", lunge:"webp", pistol:"webp", legraise:"webp", lsit:"webp", plank:"webp", pike:"svg", facepull:"svg", airsquat:"svg", deadhang:"svg", wallsit:"svg" };
+const EXTRA = {
+  bench: { m2: "Triceps, Front Delts", bad: "Flaring your elbows out to 90° and bouncing the bar off your chest." },
+  incdb: { m2: "Front Delts, Triceps", bad: "Setting the bench too steep (45°+) — it turns into a shoulder press and unloads the chest." },
+  cablefly: { m2: "Front Delts", bad: "Straightening the arms completely — it becomes a press and strains the shoulders." },
+  squat: { m2: "Glutes, Lower Back", bad: "Knees caving inward and heels lifting off the floor." },
+  legpress: { m2: "Glutes, Hamstrings", bad: "Locking the knees hard at the top and letting your hips curl off the pad." },
+  rdl: { m2: "Glutes, Lower Back", bad: "Rounding the lower back and bending the knees like a squat." },
+  deadlift: { m2: "Glutes, Back, Grip", bad: "Jerking the bar off the floor with a rounded back." },
+  row: { m2: "Biceps, Rear Delts", bad: "Standing upright and swinging the weight up with momentum." },
+  latpd: { m2: "Biceps, Rear Delts", bad: "Leaning far back and pulling the bar down to your stomach like a row." },
+  ohp: { m2: "Triceps, Upper Chest", bad: "Arching your lower back hard instead of bracing core and glutes." },
+  facepull: { m2: "Rear Delts, Rotator Cuff", bad: "Going heavy, pulling to your neck and shrugging your shoulders up." },
+  curl: { m2: "Forearms", bad: "Swinging your whole body and letting the elbows drift forward." },
+  pushdown: { m2: "Forearms", bad: "Letting the elbows flare out and the shoulders roll forward." },
+  pushup: { m2: "Triceps, Front Delts", bad: "Sagging hips and half reps — your chest should nearly touch the floor." },
+  diamond: { m2: "Chest, Front Delts", bad: "Elbows flaring wide — keep them tucked close to your ribs." },
+  pike: { m2: "Triceps, Upper Chest", bad: "Hips too low — it becomes a regular push-up and unloads the shoulders." },
+  pullup: { m2: "Biceps, Forearms", bad: "Kipping and swinging, and never reaching a full hang at the bottom." },
+  chinup: { m2: "Lats, Forearms", bad: "Cutting reps short — start every rep from straight arms." },
+  ausrow: { m2: "Biceps, Rear Delts", bad: "Sagging hips — your body should stay one straight line." },
+  dips: { m2: "Chest, Front Delts", bad: "Dropping too deep — stop when your upper arms are parallel to spare your shoulders." },
+  airsquat: { m2: "Glutes, Calves", bad: "Knees collapsing inward and heels coming off the floor." },
+  lunge: { m2: "Glutes, Calves", bad: "Front knee caving in and slamming the back knee into the floor." },
+  pistol: { m2: "Glutes, Ankle Mobility", bad: "Heel lifting and knee caving in — hold a support until your mobility catches up." },
+  legraise: { m2: "Hip Flexors, Obliques", bad: "Swinging with momentum instead of curling your pelvis up." },
+  plank: { m2: "Shoulders, Glutes", bad: "Hips sagging or piking up — keep one straight line from head to heels." },
+  lsit: { m2: "Hip Flexors, Quads", bad: "Bending the knees and leaning back instead of sitting tall." },
+  deadhang: { m2: "Forearms, Shoulders", bad: "Tensing up and shrugging — relax, breathe, and let your shoulders stretch." },
+  wallsit: { m2: "Glutes, Calves", bad: "Knees sliding way past your toes and pressing your hands on your thighs for support." }
+};
+function mediaOf(e) { const k = ANIM[e.id]; return k ? "assets/exercises/" + e.id + "." + k : ""; }
+
 const MUSCLES = ["Chest", "Back", "Legs", "Shoulders", "Arms", "Core"];
 function renderExercises() {
   const catPills = [["all", "All"], ["gym", "🏋️ Gym (Weights)"], ["cali", "🤸 Calisthenics"]]
@@ -856,6 +895,11 @@ function renderExList() {
 }
 function openExercise(id) {
   const e = exById(id); if (!e) return;
+  const media = mediaOf(e);
+  const mediaBlock = media ? '<img class="exmedia" src="' + media + '" alt="' + esc(e.n) + ' movement animation" loading="lazy">' : "";
+  const ex2 = EXTRA[e.id] || {};
+  const musBlock = '<div class="muscles"><span class="tag">🎯 Primary: ' + e.m + "</span>" + (ex2.m2 ? '<span class="tag">🤝 Secondary: ' + ex2.m2 + "</span>" : "") + "</div>";
+  const badBlock = ex2.bad ? '<div class="mistake">❌ <b>Common mistake:</b> ' + ex2.bad + "</div>" : "";
   const best = bestEver(id, null);
   const bestTxt = best < 0 ? "No logs yet — be the first!" : e.t === "w" ? "Best: " + best + " kg" : e.t === "b" ? "Best set: " + best + " reps" : "Best hold: " + best + "s";
   const histPts = [];
@@ -873,13 +917,15 @@ function openExercise(id) {
     + '<p class="small mut">Master each step for clean sets before moving on.</p>' : "";
   openSheet("<h3>" + esc(e.n) + "</h3>"
     + '<p style="margin:6px 0 2px"><span class="tag ' + e.c + '">' + (e.c === "gym" ? "Gym" : "Calisthenics") + '</span> <span class="tag">' + e.m + '</span> <span class="tag">' + e.eq + "</span></p>"
-    + '<p class="small mut">' + (e.t === "w" ? "Track: Weight (kg) + Reps" : e.t === "b" ? "Track: Added weight + Reps (bodyweight counts automatically)" : "Track: Hold duration (seconds) with built-in stopwatch") + " · Difficulty " + e.d + "/3 · " + bestTxt + "</p>"
+    + mediaBlock + musBlock
+    + '<p class="small mut" style="margin-top:10px">' + (e.t === "w" ? "Track: Weight (kg) + Reps" : e.t === "b" ? "Track: Added weight + Reps (bodyweight counts automatically)" : "Track: Hold duration (seconds) with built-in stopwatch") + " · Difficulty " + e.d + "/3 · " + bestTxt + "</p>"
     + '<h2 class="sec" style="margin-top:16px">✅ Newbie Form Cues</h2><ul class="cues">'
     + e.cues.map((c, i) => '<li><span class="n">' + (i + 1) + "</span><span>" + esc(c) + "</span></li>").join("") + "</ul>"
-    + chartBlock + prog
+    + badBlock + chartBlock + prog
     + '<button class="btn block" style="margin-top:16px" onclick="addToWorkoutFromLibrary(\'' + e.id + '\')">' + ic("plus", 18) + (DB.session ? " Add to Current Workout" : " Start Workout With This") + "</button>");
 }
 function addToWorkoutFromLibrary(id) {
+  if (DB.session && DB.session.items.some((i) => i.ex === id)) { closeSheet(); go("workout"); toast("Already in your workout 💪"); return; }
   if (!DB.session) { startSession("My Workout", "hybrid", []); }
   pickExercise(id);
   go("workout");
@@ -1034,7 +1080,8 @@ function renderProgress() {
     + '<div class="frow" style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><button class="btn soft" onclick="exportData()">' + ic("down", 18) + ' Export (.json)</button>'
     + '<button class="btn ghost" onclick="document.getElementById(\'importFile\').click()">' + ic("up", 18) + " Import (.json)</button></div>"
     + '<h2 class="sec">🧹 Start Fresh</h2><div class="card"><p class="small mut" style="margin-bottom:12px">The app ships with demo history (sample workouts, weigh-ins & XP) so you can explore. Clear it to start tracking purely from zero — the 28 exercises and 4 routines stay untouched.</p>'
-    + '<button class="btn danger block" onclick="clearDemoData()">' + ic("trash", 18) + " Mulai dari Nol (Clear Demo Data)</button></div>";
+    + '<button class="btn danger block" onclick="clearDemoData()">' + ic("trash", 18) + " Mulai dari Nol (Clear Demo Data)</button></div>"
+    + '<p class="small mut" style="text-align:center;margin:16px 8px 0">🖼️ Exercise animations from <b>hasaneyldrm/exercises-dataset</b> (CC license); Pike Push-up, Face Pull, Air Squat, Dead Hang & Wall Sit diagrams are drawn in-house. Full credits in NOTICE.md.</p>';
 }
 function clearDemoData() {
   if (!confirm("Clear all workout logs, weight logs and XP? Your custom exercises stay. This cannot be undone (export a backup first if unsure).")) return;
