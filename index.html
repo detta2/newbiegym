@@ -457,9 +457,39 @@ function toast(msg) {
   clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("on"), 2400);
 }
 
+/* ---------------- SCREEN WAKE LOCK ---------------- */
+let wakeLock = null;
+async function refreshWakeLock() {
+  const want = !!DB.session || !!sw;
+  try {
+    if (want && "wakeLock" in navigator) {
+      if (!wakeLock) {
+        wakeLock = await navigator.wakeLock.request("screen");
+        wakeLock.addEventListener("release", () => { wakeLock = null; });
+      }
+    } else if (wakeLock) { await wakeLock.release(); wakeLock = null; }
+  } catch (e) { wakeLock = null; /* tidak didukung / ditolak browser — abaikan */ }
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refreshWakeLock(); });
+
 /* ---------------- NAVIGATION & SHEETS ---------------- */
 let curView = "home";
+let sheetOpen = false, exitArmedAt = 0;
+try { history.replaceState({ ng: "root" }, ""); history.pushState({ ng: "guard" }, ""); } catch (e) {}
+window.addEventListener("popstate", () => {
+  if (sheetOpen) { closeSheetUI(); try { history.pushState({ ng: "guard" }, ""); } catch (e) {} return; }
+  if (curView !== "home") { switchView("home"); try { history.pushState({ ng: "guard" }, ""); } catch (e) {} return; }
+  if (Date.now() - exitArmedAt < 2500) return; // biarkan back berikutnya keluar aplikasi
+  exitArmedAt = Date.now();
+  try { history.pushState({ ng: "guard" }, ""); } catch (e) {}
+  toast("Press Back again to exit");
+});
 function go(view) {
+  const changed = view !== curView;
+  switchView(view);
+  if (changed) { try { history.pushState({ ng: "tab" }, ""); } catch (e) {} }
+}
+function switchView(view) {
   curView = view;
   $$(".view").forEach((v) => v.classList.remove("on"));
   $("#view-" + view).classList.add("on");
@@ -472,8 +502,12 @@ function go(view) {
 }
 $$("#botnav button").forEach((b) => b.addEventListener("click", () => go(b.dataset.nav)));
 
-function openSheet(html) { $("#sheetBody").innerHTML = html; $("#scrim").classList.add("on"); $("#sheet").classList.add("on"); }
-function closeSheet() { $("#scrim").classList.remove("on"); $("#sheet").classList.remove("on"); }
+function openSheet(html) {
+  $("#sheetBody").innerHTML = html; $("#scrim").classList.add("on"); $("#sheet").classList.add("on");
+  if (!sheetOpen) { sheetOpen = true; try { history.pushState({ ng: "sheet" }, ""); } catch (e) {} }
+}
+function closeSheetUI() { sheetOpen = false; $("#scrim").classList.remove("on"); $("#sheet").classList.remove("on"); }
+function closeSheet() { if (sheetOpen) { try { history.back(); } catch (e) { closeSheetUI(); } } else closeSheetUI(); }
 $("#scrim").addEventListener("click", closeSheet);
 
 function setModeBadge(mode) {
@@ -552,7 +586,7 @@ function renderHome() {
 function blankSet(tpl) { return { type: "N", kg: tpl && tpl.kg || 0, reps: tpl && tpl.reps || 0, sec: tpl && tpl.sec || 0, done: false }; }
 function startSession(name, cat, items) {
   DB.session = { id: uid(), name: name, cat: cat, startTs: Date.now(), items: items };
-  save(); setModeBadge(cat); go("workout");
+  save(); setModeBadge(cat); go("workout"); refreshWakeLock();
   toast("Workout started — let's go! 🔥");
 }
 function startEmpty() { startSession("Empty Workout", "hybrid", []); }
@@ -667,7 +701,7 @@ function removeSet(ii) {
 function removeExercise(ii) { DB.session.items.splice(ii, 1); save(); renderWorkout(); }
 function discardWorkout() {
   if (!confirm("Discard this workout? Logged sets will be lost.")) return;
-  DB.session = null; save(); stopRest(); renderWorkout(); toast("Workout discarded");
+  DB.session = null; save(); stopRest(); renderWorkout(); refreshWakeLock(); toast("Workout discarded");
 }
 
 /* ---- picker: add exercise to session ---- */
@@ -699,6 +733,7 @@ function toggleStopwatch(ii, si) {
     sw = { i: ii, s: si, startTs: Date.now(), base: S.items[ii].sets[si].sec || 0 };
     save(); renderWorkout();
   }
+  refreshWakeLock();
 }
 function tickStopwatch() {
   if (!sw) return;
@@ -765,7 +800,7 @@ function finishWorkout() {
   const S = DB.session; if (!S) return;
   let doneSets = 0;
   S.items.forEach((it) => it.sets.forEach((s) => { if (s.done) doneSets++; }));
-  if (doneSets === 0) { if (!confirm("No sets completed yet. Discard this workout?")) return; DB.session = null; save(); stopRest(); renderWorkout(); return; }
+  if (doneSets === 0) { if (!confirm("No sets completed yet. Discard this workout?")) return; DB.session = null; save(); stopRest(); renderWorkout(); refreshWakeLock(); return; }
   const dur = sessElapsed();
   const prs = [];
   S.items.forEach((it) => {
@@ -782,7 +817,7 @@ function finishWorkout() {
   DB.xp += xpGain;
   const after = levelOf(DB.xp);
   DB.workouts.push(wk);
-  DB.session = null; save(); stopRest(); if (sw) sw = null;
+  DB.session = null; save(); stopRest(); if (sw) sw = null; refreshWakeLock();
   const prHtml = prs.length ? '<h2 class="sec" style="margin-top:16px">' + ic("trophy", 18) + ' New PRs!</h2>' + prs.map((p) => '<div class="bestrow"><span>🏆</span><span>' + esc(p.name) + '</span><b>' + esc(p.txt) + "</b></div>").join("") : "";
   openSheet("<div style='text-align:center;padding:8px 0 2px'><div style='font-size:44px'>🎉</div><h3>Workout Complete!</h3><p class='small mut'>" + esc(wk.name) + "</p></div>"
     + '<div class="kpis" style="margin-top:14px"><div class="kpi"><b>' + fmtDur(dur) + '</b><span>Duration</span></div><div class="kpi"><b>' + vol.toLocaleString("en-US") + ' kg</b><span>Volume</span></div>'
@@ -823,6 +858,16 @@ function openExercise(id) {
   const e = exById(id); if (!e) return;
   const best = bestEver(id, null);
   const bestTxt = best < 0 ? "No logs yet — be the first!" : e.t === "w" ? "Best: " + best + " kg" : e.t === "b" ? "Best set: " + best + " reps" : "Best hold: " + best + "s";
+  const histPts = [];
+  DB.workouts.slice().sort((a, b) => a.ts - b.ts).forEach((w) => {
+    const it = w.items.find((x) => x.ex === id); if (!it) return;
+    let best = -1;
+    it.sets.forEach((s) => { if (!s.done) return; const val = e.t === "w" ? (s.kg || 0) * (1 + (s.reps || 0) / 30) : e.t === "b" ? (s.reps || 0) : (s.sec || 0); if (val > best) best = val; });
+    if (best >= 0) histPts.push({ v: e.t === "w" ? Math.round(best * 10) / 10 : best });
+  });
+  const chartBlock = histPts.length >= 2
+    ? '<h2 class="sec" style="margin-top:16px">📈 Your Progress</h2><div style="background:var(--bg);border:1.5px solid var(--border);border-radius:16px;padding:8px 6px 2px">' + lineChartSvg(histPts, e.c === "cali" ? "#10B981" : "#2563EB", e.t === "time" ? "s" : "") + '</div><p class="small mut" style="text-align:center;margin-top:6px">' + (e.t === "w" ? "Estimated 1RM per workout (Epley)" : e.t === "b" ? "Best set (reps) per workout" : "Best hold (seconds) per workout") + "</p>"
+    : histPts.length === 1 ? '<p class="small mut" style="margin-top:14px">📈 Logged once so far — finish one more workout with this exercise to see your progress chart.</p>' : "";
   const prog = e.prog ? '<h2 class="sec" style="margin-top:16px">🪜 Progression Path</h2><div class="prog">' + e.prog.map((p, i) =>
     (i ? '<span class="arr">→</span>' : "") + '<span class="step' + (p === e.n ? " cur" : "") + '">' + esc(p) + "</span>").join("") + "</div>"
     + '<p class="small mut">Master each step for clean sets before moving on.</p>' : "";
@@ -831,7 +876,7 @@ function openExercise(id) {
     + '<p class="small mut">' + (e.t === "w" ? "Track: Weight (kg) + Reps" : e.t === "b" ? "Track: Added weight + Reps (bodyweight counts automatically)" : "Track: Hold duration (seconds) with built-in stopwatch") + " · Difficulty " + e.d + "/3 · " + bestTxt + "</p>"
     + '<h2 class="sec" style="margin-top:16px">✅ Newbie Form Cues</h2><ul class="cues">'
     + e.cues.map((c, i) => '<li><span class="n">' + (i + 1) + "</span><span>" + esc(c) + "</span></li>").join("") + "</ul>"
-    + prog
+    + chartBlock + prog
     + '<button class="btn block" style="margin-top:16px" onclick="addToWorkoutFromLibrary(\'' + e.id + '\')">' + ic("plus", 18) + (DB.session ? " Add to Current Workout" : " Start Workout With This") + "</button>");
 }
 function addToWorkoutFromLibrary(id) {
@@ -955,6 +1000,7 @@ function renderProgress() {
   const bestRows = allExercises().map((e) => ({ e: e, best: bestEver(e.id, null) })).filter((x) => x.best >= 0)
     .map((x) => '<div class="bestrow"><span>' + (x.e.c === "cali" ? "🤸" : "🏋️") + "</span><span>" + esc(x.e.n) + '</span><b>' + (x.e.t === "w" ? x.best + " kg" : x.e.t === "b" ? x.best + " reps" : x.best + "s") + "</b></div>").join("");
   // body tracker
+  const hasW = DB.weights.length > 0;
   const bw = bodyweight();
   const hM = (DB.height || 170) / 100;
   const bmi = bw / (hM * hM);
@@ -975,18 +1021,26 @@ function renderProgress() {
     + caliChart
     + (bestRows ? '<h2 class="sec">🏆 Personal Bests</h2><div class="card" style="padding:6px 16px">' + bestRows + "</div>" : "")
     + '<h2 class="sec">⚖️ Body Tracker</h2><div class="card">'
-    + '<div class="kpis" style="margin-bottom:6px"><div class="kpi" style="box-shadow:none"><b>' + bw + ' kg</b><span>Current weight</span></div>'
-    + '<div class="kpi" style="box-shadow:none"><b>' + bmi.toFixed(1) + '</b><span>BMI · ' + bmiCat + "</span></div></div>"
+    + '<div class="kpis" style="margin-bottom:6px"><div class="kpi" style="box-shadow:none"><b>' + (hasW ? bw + " kg" : "—") + '</b><span>Current weight</span></div>'
+    + '<div class="kpi" style="box-shadow:none"><b>' + (hasW ? bmi.toFixed(1) : "—") + '</b><span>BMI' + (hasW ? " · " + bmiCat : "") + "</span></div></div>"
     + '<div class="frow"><div class="fgroup"><label>Height (cm)</label><input type="number" id="heightIn" value="' + (DB.height || 170) + '" onchange="DB.height=parseFloat(this.value)||170;save();renderProgress()"></div>'
     + '<div class="fgroup"><label>Log weight (kg)</label><input type="number" inputmode="decimal" id="bwIn" placeholder="e.g. 70.5"></div></div>'
     + '<button class="btn soft block" onclick="addWeight()">Save Weight Entry</button>'
-    + '<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><span class="tag">🎯 ~' + kcal.toLocaleString("en-US") + ' kcal/day maintenance (est.)</span><span class="tag">🥩 Protein target: ' + protein + ' g/day</span></div>'
-    + '<p class="small mut" style="margin-top:8px">Beginner estimates: maintenance ≈ bodyweight × 33 kcal; protein ≈ 1.6 g per kg bodyweight for muscle growth.</p>'
+    + (hasW ? '<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><span class="tag">🎯 ~' + kcal.toLocaleString("en-US") + ' kcal/day maintenance (est.)</span><span class="tag">🥩 Protein target: ' + protein + ' g/day</span></div>' 
+    + '<p class="small mut" style="margin-top:8px">Beginner estimates: maintenance ≈ bodyweight × 33 kcal; protein ≈ 1.6 g per kg bodyweight for muscle growth.</p>' : '<p class="small mut" style="margin-top:10px">Log your first weigh-in to unlock BMI, calorie & protein targets.</p>')
     + wChart + wList + "</div>"
     + '<h2 class="sec">🕘 Workout History</h2><div class="card" style="padding:6px 16px">' + (hist || '<div class="empty">No workouts yet.</div>') + "</div>"
     + '<h2 class="sec">💾 Backup (100% Offline)</h2><div class="card"><p class="small mut" style="margin-bottom:12px">Everything lives on this device. Export a backup file before reinstalling the app, import it anytime to restore.</p>'
     + '<div class="frow" style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><button class="btn soft" onclick="exportData()">' + ic("down", 18) + ' Export (.json)</button>'
-    + '<button class="btn ghost" onclick="document.getElementById(\'importFile\').click()">' + ic("up", 18) + " Import (.json)</button></div></div>";
+    + '<button class="btn ghost" onclick="document.getElementById(\'importFile\').click()">' + ic("up", 18) + " Import (.json)</button></div>"
+    + '<h2 class="sec">🧹 Start Fresh</h2><div class="card"><p class="small mut" style="margin-bottom:12px">The app ships with demo history (sample workouts, weigh-ins & XP) so you can explore. Clear it to start tracking purely from zero — the 28 exercises and 4 routines stay untouched.</p>'
+    + '<button class="btn danger block" onclick="clearDemoData()">' + ic("trash", 18) + " Mulai dari Nol (Clear Demo Data)</button></div>";
+}
+function clearDemoData() {
+  if (!confirm("Clear all workout logs, weight logs and XP? Your custom exercises stay. This cannot be undone (export a backup first if unsure).")) return;
+  DB.workouts = []; DB.weights = []; DB.xp = 0; DB.session = null;
+  save(); stopRest(); if (sw) sw = null; refreshWakeLock();
+  renderProgress(); toast("Fresh start! Your history is now a blank page 🌱");
 }
 function addWeight() {
   const v = parseFloat($("#bwIn").value);
